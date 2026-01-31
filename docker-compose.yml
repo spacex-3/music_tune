@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  tunehub-proxy:
+    image: ghcr.io/spacex-3/music_tune:latest
+    container_name: tunehub-subsonic-proxy
+    restart: unless-stopped
+    ports:
+      - "4040:4040"
+    environment:
+      - TUNEHUB_API_KEY=${TUNEHUB_API_KEY}
+      - SUBSONIC_USER=${SUBSONIC_USER:-admin}
+      - SUBSONIC_PASSWORD=${SUBSONIC_PASSWORD:-admin}
+      - DEFAULT_QUALITY=${DEFAULT_QUALITY:-flac}
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=4040
+    volumes:
+      - ./cache:/app/cache
+      - ./data:/app/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:4040/rest/ping.view?u=admin&p=admin&v=1.16.0&c=healthcheck" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

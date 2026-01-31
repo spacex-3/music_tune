@@ -37,6 +37,41 @@ cp .env.example .env
 # 编辑 .env 填入你的 TuneHub API Key
 ```
 
+## 🐳 Docker 部署
+
+### 使用 Docker Compose (推荐)
+
+```bash
+# 创建 .env 文件
+echo "TUNEHUB_API_KEY=your_api_key_here" > .env
+
+# 启动服务
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f
+```
+
+### 使用 Docker 命令
+
+```bash
+docker run -d \
+  --name tunehub-proxy \
+  -p 4040:4040 \
+  -e TUNEHUB_API_KEY=your_api_key_here \
+  -e SUBSONIC_USER=admin \
+  -e SUBSONIC_PASSWORD=admin \
+  -v ./cache:/app/cache \
+  -v ./data:/app/data \
+  ghcr.io/spacex-3/music_tune:latest
+```
+
+### 镜像地址
+
+```
+ghcr.io/spacex-3/music_tune:latest
+```
+
 ## ⚙️ 配置
 
 编辑 `.env` 文件：
