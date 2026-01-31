@@ -378,48 +378,78 @@ def credits_dashboard():
         p = r.get("platform", "unknown")
         platform_counts[p] = platform_counts.get(p, 0) + 1
     
+    # Build platform stats HTML (Python 3.11 compatible)
+    platform_stats_html = ""
+    for platform, count in platform_counts.items():
+        platform_stats_html += '<div class="stat-card"><div class="stat-value">{}</div><div class="stat-label">{}</div></div>'.format(count, platform.upper())
+    
+    # Build table rows HTML (Python 3.11 compatible)
+    table_rows_html = ""
+    for r in reversed(filtered_records):
+        row_date = r.get("date", "")
+        row_time = r.get("time", "")
+        row_platform = r.get("platform", "")
+        row_title = r.get("title", "Unknown")
+        row_artist = r.get("artist", "Unknown")
+        row_quality = r.get("quality", "-")
+        table_rows_html += '''<tr>
+            <td>{} {}</td>
+            <td><span class="platform {}">{}</span></td>
+            <td>{}</td>
+            <td>{}</td>
+            <td>{}</td>
+        </tr>'''.format(row_date, row_time, row_platform, row_platform.upper(), row_title, row_artist, row_quality)
+    
+    if not table_rows_html:
+        table_rows_html = '<tr><td colspan="5" class="empty">No records for selected date range</td></tr>'
+    
+    # Date range label
+    date_label = start_date
+    if end_date != start_date:
+        date_label = start_date + " to " + end_date
+    
     # Generate HTML
-    html = f'''<!DOCTYPE html>
+    html = '''<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TuneHub Credits Dashboard</title>
     <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ 
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #eee;
             min-height: 100vh;
             padding: 20px;
-        }}
-        .container {{ max-width: 1200px; margin: 0 auto; }}
-        h1 {{ 
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { 
             text-align: center;
             margin-bottom: 30px;
             background: linear-gradient(90deg, #00d4ff, #9c27b0);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             font-size: 2.5em;
-        }}
-        .stats {{ 
+        }
+        .stats { 
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
-        }}
-        .stat-card {{
+        }
+        .stat-card {
             background: rgba(255,255,255,0.1);
             backdrop-filter: blur(10px);
             border-radius: 16px;
             padding: 20px;
             text-align: center;
             border: 1px solid rgba(255,255,255,0.1);
-        }}
-        .stat-value {{ font-size: 2.5em; font-weight: bold; color: #00d4ff; }}
-        .stat-label {{ color: #aaa; margin-top: 5px; }}
-        .filters {{
+        }
+        .stat-value { font-size: 2.5em; font-weight: bold; color: #00d4ff; }
+        .stat-label { color: #aaa; margin-top: 5px; }
+        .filters {
             background: rgba(255,255,255,0.05);
             border-radius: 12px;
             padding: 20px;
@@ -428,16 +458,16 @@ def credits_dashboard():
             gap: 15px;
             flex-wrap: wrap;
             align-items: center;
-        }}
-        .filters label {{ color: #aaa; }}
-        .filters input {{
+        }
+        .filters label { color: #aaa; }
+        .filters input {
             padding: 10px 15px;
             border-radius: 8px;
             border: 1px solid rgba(255,255,255,0.2);
             background: rgba(255,255,255,0.1);
             color: #fff;
-        }}
-        .filters button {{
+        }
+        .filters button {
             padding: 10px 25px;
             border-radius: 8px;
             border: none;
@@ -445,37 +475,37 @@ def credits_dashboard():
             color: white;
             cursor: pointer;
             font-weight: bold;
-        }}
-        .filters button:hover {{ opacity: 0.9; }}
-        table {{
+        }
+        .filters button:hover { opacity: 0.9; }
+        table {
             width: 100%;
             border-collapse: collapse;
             background: rgba(255,255,255,0.05);
             border-radius: 12px;
             overflow: hidden;
-        }}
-        th, td {{
+        }
+        th, td {
             padding: 15px;
             text-align: left;
             border-bottom: 1px solid rgba(255,255,255,0.1);
-        }}
-        th {{ 
+        }
+        th { 
             background: rgba(0,212,255,0.2);
             font-weight: 600;
             color: #00d4ff;
-        }}
-        tr:hover {{ background: rgba(255,255,255,0.05); }}
-        .platform {{
+        }
+        tr:hover { background: rgba(255,255,255,0.05); }
+        .platform {
             display: inline-block;
             padding: 4px 10px;
             border-radius: 20px;
             font-size: 0.8em;
             font-weight: 600;
-        }}
-        .platform.netease {{ background: #e60000; }}
-        .platform.qq {{ background: #12b7f5; }}
-        .platform.kuwo {{ background: #ff9500; }}
-        .empty {{ text-align: center; padding: 40px; color: #666; }}
+        }
+        .platform.netease { background: #e60000; }
+        .platform.qq { background: #12b7f5; }
+        .platform.kuwo { background: #ff9500; }
+        .empty { text-align: center; padding: 40px; color: #666; }
     </style>
 </head>
 <body>
@@ -484,17 +514,17 @@ def credits_dashboard():
         
         <div class="stats">
             <div class="stat-card">
-                <div class="stat-value">{total_credits}</div>
-                <div class="stat-label">Credits Used ({start_date}{" to " + end_date if end_date != start_date else ""})</div>
+                <div class="stat-value">''' + str(total_credits) + '''</div>
+                <div class="stat-label">Credits Used (''' + date_label + ''')</div>
             </div>
-            {"".join(f'<div class="stat-card"><div class="stat-value">{count}</div><div class="stat-label">{platform.upper()}</div></div>' for platform, count in platform_counts.items())}
+            ''' + platform_stats_html + '''
         </div>
         
         <form class="filters" method="get">
             <label>Start Date:</label>
-            <input type="date" name="start_date" value="{start_date}">
+            <input type="date" name="start_date" value="''' + start_date + '''">
             <label>End Date:</label>
-            <input type="date" name="end_date" value="{end_date}">
+            <input type="date" name="end_date" value="''' + end_date + '''">
             <button type="submit">Filter</button>
             <button type="button" onclick="window.location.href='/'">Today</button>
         </form>
@@ -510,13 +540,7 @@ def credits_dashboard():
                 </tr>
             </thead>
             <tbody>
-                {"".join(f'''<tr>
-                    <td>{r.get("date", "")} {r.get("time", "")}</td>
-                    <td><span class="platform {r.get("platform", "")}">{r.get("platform", "").upper()}</span></td>
-                    <td>{r.get("title", "Unknown")}</td>
-                    <td>{r.get("artist", "Unknown")}</td>
-                    <td>{r.get("quality", "-")}</td>
-                </tr>''' for r in reversed(filtered_records)) or '<tr><td colspan="5" class="empty">No records for selected date range</td></tr>'}
+                ''' + table_rows_html + '''
             </tbody>
         </table>
     </div>
