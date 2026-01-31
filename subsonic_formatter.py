@@ -16,6 +16,8 @@ def create_subsonic_response(status: str = "ok") -> Element:
     root.set("version", SUBSONIC_VERSION)
     root.set("type", SUBSONIC_SERVER_NAME)
     root.set("serverVersion", "1.0.0")
+    # OpenSubsonic support - required for Amperfy to detect lyrics feature
+    root.set("openSubsonic", "true")
     return root
 
 
@@ -168,10 +170,13 @@ def _set_song_attributes(elem: Element, song: Dict[str, Any]) -> None:
     elem.set("id", song_id)
     elem.set("parent", "1")
     elem.set("title", song.get("title", "Unknown"))
-    elem.set("album", song.get("album", ""))
+    elem.set("album", song.get("album", "") or song.get("title", "Unknown"))
     elem.set("artist", song.get("artist", "Unknown"))
     elem.set("isDir", "false")
     elem.set("duration", str(song.get("duration", 0)))
+    elem.set("track", "1")
+    elem.set("year", "2024")
+    elem.set("genre", "Pop")
     
     # Set bitRate and suffix based on configured quality
     from config import DEFAULT_QUALITY
@@ -192,18 +197,21 @@ def _set_song_attributes(elem: Element, song: Dict[str, Any]) -> None:
         elem.set("suffix", "mp3")
         elem.set("contentType", "audio/mpeg")
     
-    elem.set("size", "0")
+    elem.set("size", "10000000")  # Approximate file size
     elem.set("isVideo", "false")
     elem.set("type", "music")
     
-    # Set albumId for clients that use it for cover art (format: al-{albumId})
+    # CRITICAL for Amperfy: Set artistId (using song_id as synthetic artist ID)
+    elem.set("artistId", f"ar-{song_id}")
+    
+    # Set albumId for clients that use it for cover art
     # Use song ID as album ID since we treat each song as its own "album"
     elem.set("albumId", song_id)
     
-    # Always set coverArt when coverUrl exists
-    if song.get("coverUrl"):
-        elem.set("coverArt", song_id)
+    # Always set coverArt (Amperfy needs this)
+    elem.set("coverArt", song_id)
     
+    elem.set("path", f"music/{song_id}.flac")
     elem.set("created", "2024-01-01T00:00:00")
 
 

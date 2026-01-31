@@ -21,7 +21,7 @@ from subsonic_formatter import (
     format_ping, format_license, format_playlists, format_playlist,
     format_search_result, format_error, format_response,
     format_music_folders, format_indexes, format_song,
-    create_subsonic_response, SubElement
+    create_subsonic_response, SubElement, _set_song_attributes
 )
 
 # Configure logging - both console and file
@@ -110,6 +110,17 @@ def cleanup_audio_cache():
     except Exception as e:
         logger.error(f"[CACHE] Cleanup error: {e}")
 
+
+# Helper function to strip platform prefix from artist/album names
+def strip_platform_prefix(name: str) -> str:
+    """Remove platform prefix like 'QQ - ' or '网易云 - ' from name"""
+    prefixes = ["网易云 - ", "QQ - ", "酷我 - "]
+    for prefix in prefixes:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
 # Pending requests (to prevent duplicate API calls)
 pending_requests = set()
 
@@ -125,6 +136,14 @@ def load_cache():
                 playlist_cache = data.get('playlists', {})
                 stream_url_cache = data.get('streams', {})
                 song_metadata_cache = data.get('metadata', {})
+                
+                # Clear cached playlist list to force fresh API call with current config
+                # This ensures config changes take effect immediately
+                keys_to_remove = [k for k in playlist_cache if k.startswith('playlists_filtered_')]
+                for k in keys_to_remove:
+                    del playlist_cache[k]
+                    logger.info(f"[STARTUP] Cleared stale playlist cache: {k}")
+                
                 logger.info(f"Loaded cache: {len(playlist_cache)} playlists, {len(song_metadata_cache)} songs")
     except Exception as e:
         logger.error(f"Failed to load cache: {e}")
@@ -189,6 +208,58 @@ def save_user_data():
         except Exception as e:
             logger.error(f"Failed to save user data: {e}")
 
+# ============ Credits Usage Logging ============
+CREDITS_LOG_FILE = "credits_log.json"
+credits_log = []  # List of credit usage records
+
+def load_credits_log():
+    """Load credits log from disk"""
+    global credits_log
+    try:
+        if os.path.exists(CREDITS_LOG_FILE):
+            with open(CREDITS_LOG_FILE, 'r') as f:
+                credits_log = json.load(f)
+                logger.info(f"[CREDITS] Loaded {len(credits_log)} credit usage records")
+    except Exception as e:
+        logger.error(f"Failed to load credits log: {e}")
+
+credits_log_lock = threading.Lock()
+
+def save_credits_log():
+    """Save credits log to disk"""
+    with credits_log_lock:
+        try:
+            with open(CREDITS_LOG_FILE, 'w') as f:
+                json.dump(credits_log, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Failed to save credits log: {e}")
+
+def log_credit_usage(platform: str, song_id: str, title: str, artist: str, file_size: int = 0, quality: str = ""):
+    """Record a credit usage event"""
+    from datetime import datetime
+    
+    record = {
+        "timestamp": datetime.now().isoformat(),
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "platform": platform,
+        "song_id": song_id,
+        "title": title,
+        "artist": artist,
+        "file_size": file_size,
+        "file_size_mb": round(file_size / 1024 / 1024, 2) if file_size else 0,
+        "quality": quality
+    }
+    
+    with credits_log_lock:
+        credits_log.append(record)
+    
+    # Save asynchronously
+    import threading
+    threading.Thread(target=save_credits_log, daemon=True).start()
+    
+    logger.info(f"[CREDITS] Logged: {platform}:{song_id} - {artist} - {title}")
+
 # ============ Initialize Data (only in worker process, not reloader parent) ============
 import os as _os
 _is_werkzeug_reloader_parent = app.debug and _os.environ.get('WERKZEUG_RUN_MAIN') != 'true'
@@ -199,7 +270,9 @@ if not _is_werkzeug_reloader_parent:
     atexit.register(save_cache)
     load_user_data()
     atexit.register(save_user_data)
-    logger.info("Cache and user data initialized (worker process)")
+    load_credits_log()
+    atexit.register(save_credits_log)
+    logger.info("Cache, user data, and credits log initialized (worker process)")
 else:
     # Reloader parent: do NOT load or save - let worker handle it
     logger.info("Skipping data init (reloader parent process)")
@@ -276,6 +349,205 @@ def make_response_from_element(element) -> Response:
     return Response(content, content_type=content_type)
 
 
+# ============ Web Dashboard ============
+
+@app.route("/")
+@app.route("/dashboard")
+def credits_dashboard():
+    """Credits usage dashboard with date filtering"""
+    from datetime import datetime, timedelta
+    
+    # Get date parameters
+    start_date = request.args.get("start_date", datetime.now().strftime("%Y-%m-%d"))
+    end_date = request.args.get("end_date", start_date)
+    
+    # Filter records by date
+    filtered_records = []
+    with credits_log_lock:
+        for record in credits_log:
+            if start_date <= record.get("date", "") <= end_date:
+                filtered_records.append(record)
+    
+    # Calculate totals
+    total_credits = len(filtered_records)
+    platform_counts = {}
+    for r in filtered_records:
+        p = r.get("platform", "unknown")
+        platform_counts[p] = platform_counts.get(p, 0) + 1
+    
+    # Generate HTML
+    html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TuneHub Credits Dashboard</title>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{ 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }}
+        .container {{ max-width: 1200px; margin: 0 auto; }}
+        h1 {{ 
+            text-align: center;
+            margin-bottom: 30px;
+            background: linear-gradient(90deg, #00d4ff, #9c27b0);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-size: 2.5em;
+        }}
+        .stats {{ 
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }}
+        .stat-card {{
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 20px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.1);
+        }}
+        .stat-value {{ font-size: 2.5em; font-weight: bold; color: #00d4ff; }}
+        .stat-label {{ color: #aaa; margin-top: 5px; }}
+        .filters {{
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }}
+        .filters label {{ color: #aaa; }}
+        .filters input {{
+            padding: 10px 15px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }}
+        .filters button {{
+            padding: 10px 25px;
+            border-radius: 8px;
+            border: none;
+            background: linear-gradient(90deg, #00d4ff, #9c27b0);
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+        }}
+        .filters button:hover {{ opacity: 0.9; }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            overflow: hidden;
+        }}
+        th, td {{
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }}
+        th {{ 
+            background: rgba(0,212,255,0.2);
+            font-weight: 600;
+            color: #00d4ff;
+        }}
+        tr:hover {{ background: rgba(255,255,255,0.05); }}
+        .platform {{
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 600;
+        }}
+        .platform.netease {{ background: #e60000; }}
+        .platform.qq {{ background: #12b7f5; }}
+        .platform.kuwo {{ background: #ff9500; }}
+        .empty {{ text-align: center; padding: 40px; color: #666; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 TuneHub Credits Dashboard</h1>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value">{total_credits}</div>
+                <div class="stat-label">Credits Used ({start_date}{" to " + end_date if end_date != start_date else ""})</div>
+            </div>
+            {"".join(f'<div class="stat-card"><div class="stat-value">{count}</div><div class="stat-label">{platform.upper()}</div></div>' for platform, count in platform_counts.items())}
+        </div>
+        
+        <form class="filters" method="get">
+            <label>Start Date:</label>
+            <input type="date" name="start_date" value="{start_date}">
+            <label>End Date:</label>
+            <input type="date" name="end_date" value="{end_date}">
+            <button type="submit">Filter</button>
+            <button type="button" onclick="window.location.href='/'">Today</button>
+        </form>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Platform</th>
+                    <th>Song</th>
+                    <th>Artist</th>
+                    <th>Quality</th>
+                </tr>
+            </thead>
+            <tbody>
+                {"".join(f'''<tr>
+                    <td>{r.get("date", "")} {r.get("time", "")}</td>
+                    <td><span class="platform {r.get("platform", "")}">{r.get("platform", "").upper()}</span></td>
+                    <td>{r.get("title", "Unknown")}</td>
+                    <td>{r.get("artist", "Unknown")}</td>
+                    <td>{r.get("quality", "-")}</td>
+                </tr>''' for r in reversed(filtered_records)) or '<tr><td colspan="5" class="empty">No records for selected date range</td></tr>'}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>'''
+    
+    return Response(html, content_type='text/html; charset=utf-8')
+
+
+@app.route("/api/credits")
+def api_credits():
+    """JSON API for credits usage data"""
+    from datetime import datetime
+    
+    start_date = request.args.get("start_date", datetime.now().strftime("%Y-%m-%d"))
+    end_date = request.args.get("end_date", start_date)
+    
+    filtered_records = []
+    with credits_log_lock:
+        for record in credits_log:
+            if start_date <= record.get("date", "") <= end_date:
+                filtered_records.append(record)
+    
+    return Response(
+        json.dumps({
+            "start_date": start_date,
+            "end_date": end_date,
+            "total_credits": len(filtered_records),
+            "records": filtered_records
+        }, ensure_ascii=False, indent=2),
+        content_type='application/json; charset=utf-8'
+    )
+
+
 # ============ System Endpoints ============
 
 @app.route("/rest/ping", methods=["GET"])
@@ -292,6 +564,153 @@ def ping():
 def get_license():
     """Get license information"""
     return make_response_from_element(format_license())
+
+
+@app.route("/rest/getOpenSubsonicExtensions", methods=["GET"])
+@app.route("/rest/getOpenSubsonicExtensions.view", methods=["GET"])
+@require_auth
+def get_opensubsonic_extensions():
+    """Return supported OpenSubsonic extensions - required for Amperfy lyrics"""
+    root = create_subsonic_response("ok")
+    # Add openSubsonic="true" to response
+    root.set("openSubsonic", "true")
+    
+    # Amperfy parser looks for 'name' attribute on openSubsonicExtensions element directly
+    # See: SsOpenSubsonicExtensionsParserDelegate.swift
+    extensions_elem = SubElement(root, "openSubsonicExtensions")
+    extensions_elem.set("name", "songLyrics")
+    extensions_elem.set("versions", "1")
+    
+    return make_response_from_element(root)
+
+
+def parse_lrc_to_lines(lrc_text: str):
+    """Parse LRC format to structured lyrics lines
+    
+    LRC format: [mm:ss.xx]Lyrics text
+    Returns list of dicts: [{"start": milliseconds, "value": "text"}, ...]
+    """
+    import re
+    lines = []
+    
+    # Match [mm:ss.xx] or [mm:ss:xx] or [mm:ss] patterns
+    pattern = r'\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\](.*)'
+    
+    for line in lrc_text.split('\n'):
+        line = line.strip()
+        match = re.match(pattern, line)
+        if match:
+            minutes = int(match.group(1))
+            seconds = int(match.group(2))
+            ms_part = match.group(3)
+            text = match.group(4).strip()
+            
+            # Convert to milliseconds
+            milliseconds = (minutes * 60 + seconds) * 1000
+            if ms_part:
+                # Handle different ms formats (2 or 3 digits)
+                if len(ms_part) == 2:
+                    milliseconds += int(ms_part) * 10
+                else:
+                    milliseconds += int(ms_part)
+            
+            if text:  # Only add non-empty lines
+                lines.append({"start": milliseconds, "value": text})
+    
+    return lines
+
+
+@app.route("/rest/getLyricsBySongId", methods=["GET"])
+@app.route("/rest/getLyricsBySongId.view", methods=["GET"])
+@require_auth
+def get_lyrics_by_song_id():
+    """Get structured lyrics by song ID - OpenSubsonic extension for Amperfy"""
+    song_id = request.args.get("id", "")
+    
+    if not song_id:
+        return make_response_from_element(format_error(10, "Required parameter is missing: id"))
+    
+    # Get cached metadata for artist/title info
+    cached_metadata = get_cached(song_metadata_cache, song_id)
+    artist = cached_metadata.get("artist", "Unknown") if cached_metadata else "Unknown"
+    title = cached_metadata.get("title", "Unknown") if cached_metadata else "Unknown"
+    
+    lrc_text = ""
+    
+    # Try to get lyrics from cache first
+    if cached_metadata and cached_metadata.get("lyrics"):
+        lrc_text = cached_metadata["lyrics"]
+        logger.info(f"[LYRICS] Cache hit for {song_id}")
+    
+    # If not in cache and is netease, fetch from free API
+    elif song_id.startswith("netease:"):
+        try:
+            import requests
+            actual_id = song_id.split(":")[1]
+            url = f"https://music.163.com/api/song/lyric?id={actual_id}&lv=-1&kv=-1&tv=-1"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                "Referer": "https://music.163.com/"
+            }
+            resp = requests.get(url, headers=headers, timeout=5)
+            if resp.ok:
+                data = resp.json()
+                lrc_text = data.get("lrc", {}).get("lyric", "")
+                
+                if lrc_text:
+                    # Cache the lyrics
+                    if not cached_metadata:
+                        cached_metadata = {"id": song_id, "artist": artist, "title": title}
+                    cached_metadata["lyrics"] = lrc_text
+                    set_cached(song_metadata_cache, song_id, cached_metadata)
+                    logger.info(f"[LYRICS] Fetched and cached for {song_id}")
+        except Exception as e:
+            logger.warning(f"[LYRICS] Failed to fetch: {e}")
+    
+    # Build OpenSubsonic structured lyrics response
+    root = create_subsonic_response("ok")
+    root.set("openSubsonic", "true")
+    
+    lyrics_list = SubElement(root, "lyricsList")
+    
+    if lrc_text:
+        parsed_lines = parse_lrc_to_lines(lrc_text)
+        
+        if parsed_lines:
+            # Synced lyrics (with timestamps)
+            structured = SubElement(lyrics_list, "structuredLyrics")
+            structured.set("displayArtist", strip_platform_prefix(artist))
+            structured.set("displayTitle", title)
+            structured.set("lang", "zh")  # Assume Chinese for now
+            structured.set("synced", "true")
+            structured.set("offset", "0")
+            
+            for line_data in parsed_lines:
+                line_elem = SubElement(structured, "line")
+                line_elem.set("start", str(line_data["start"]))
+                line_elem.text = line_data["value"]
+            
+            logger.info(f"[LYRICS] Returning {len(parsed_lines)} synced lines for {song_id}")
+        else:
+            # Check if it's unsynced lyrics (no timestamps)
+            plain_lines = [l.strip() for l in lrc_text.split('\n') if l.strip() and not l.startswith('[')]
+            if plain_lines:
+                structured = SubElement(lyrics_list, "structuredLyrics")
+                structured.set("displayArtist", strip_platform_prefix(artist))
+                structured.set("displayTitle", title)
+                structured.set("lang", "zh")
+                structured.set("synced", "false")
+                structured.set("offset", "0")
+                
+                for text in plain_lines:
+                    line_elem = SubElement(structured, "line")
+                    line_elem.text = text
+                
+                logger.info(f"[LYRICS] Returning {len(plain_lines)} unsynced lines for {song_id}")
+    else:
+        logger.info(f"[LYRICS] No lyrics found for {song_id}")
+    
+    return make_response_from_element(root)
 
 
 # ============ Browsing Endpoints ============
@@ -361,14 +780,22 @@ def get_playlists():
         
         # Apply whitelist filter
         filtered_toplists = []
+        logger.info(f"[DEBUG] ALLOWED_PLAYLISTS = {ALLOWED_PLAYLISTS}")
         for toplist in all_toplists:
             platform_id = toplist.get("platform", "")
             toplist_id = str(toplist.get("id", ""))
+            toplist_name = toplist.get("name", "Unknown")
             allowed_ids = ALLOWED_PLAYLISTS.get(platform_id, [])
+            
+            logger.info(f"[DEBUG] Checking: platform={platform_id}, id={toplist_id}, name={toplist_name}")
+            logger.info(f"[DEBUG] Allowed IDs for {platform_id}: {allowed_ids}")
             
             # If whitelist is empty, skip that platform. If has items, filter by ID.
             if allowed_ids and toplist_id in allowed_ids:
+                logger.info(f"[DEBUG] ✓ PASSED: {toplist_name}")
                 filtered_toplists.append(toplist)
+            else:
+                logger.info(f"[DEBUG] ✗ REJECTED: {toplist_name} (id={toplist_id} not in {allowed_ids[:3]}...)")
         
         logger.info(f"[FILTER] Filtered {len(all_toplists)} -> {len(filtered_toplists)} playlists")
         
@@ -487,39 +914,50 @@ def get_playlist():
 @app.route("/rest/search3.view", methods=["GET"])
 @require_auth
 def search():
-    """Search for songs across multiple platforms"""
+    """Search for songs across multiple platforms - handles artist/album/song counts"""
+    from xml.etree.ElementTree import SubElement
     try:
         query = request.args.get("query", "")
         
         if not query:
             return make_response_from_element(format_error(10, "Required parameter is missing: query"))
         
-        # Allow specifying single platform via parameter, otherwise search both
-        platform = request.args.get("platform", "")
+        # Get count parameters (Amperfy sends separate requests for each type)
+        artist_count = int(request.args.get("artistCount", "20"))
+        album_count = int(request.args.get("albumCount", "20"))
+        song_count = int(request.args.get("songCount", "20"))
         
+        # Determine result type based on endpoint
+        is_search3 = "search3" in request.path
+        result_elem_name = "searchResult3" if is_search3 else "searchResult2"
+        
+        # Only fetch from API if we need songs (to avoid wasting API calls)
         all_songs = []
-        
-        if platform:
-            # Single platform search
-            songs = tunehub_client.search(platform, query)
-            all_songs.extend(songs)
-        else:
-            # Multi-platform search: search both netease and qq
-            from concurrent.futures import ThreadPoolExecutor, as_completed
+        if song_count > 0 or artist_count > 0 or album_count > 0:
+            # Allow specifying single platform via parameter, otherwise search both
+            platform = request.args.get("platform", "")
             
-            def search_platform(p):
-                try:
-                    return tunehub_client.search(p, query)
-                except Exception as e:
-                    logger.warning(f"Search failed for {p}: {e}")
-                    return []
-            
-            # Search both platforms in parallel
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                futures = {executor.submit(search_platform, p): p for p in ["qq", "netease"]}
-                for future in as_completed(futures):
-                    songs = future.result()
-                    all_songs.extend(songs)
+            if platform:
+                # Single platform search
+                songs = tunehub_client.search(platform, query)
+                all_songs.extend(songs)
+            else:
+                # Multi-platform search: search both netease and qq
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                
+                def search_platform(p):
+                    try:
+                        return tunehub_client.search(p, query)
+                    except Exception as e:
+                        logger.warning(f"Search failed for {p}: {e}")
+                        return []
+                
+                # Search both platforms in parallel
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = {executor.submit(search_platform, p): p for p in ["qq", "netease"]}
+                    for future in as_completed(futures):
+                        songs = future.result()
+                        all_songs.extend(songs)
         
         # Cache song metadata for cover art support
         for song in all_songs:
@@ -527,7 +965,75 @@ def search():
             if song_id and song.get("coverUrl"):
                 set_cached(song_metadata_cache, song_id, song)
         
-        return make_response_from_element(format_search_result(all_songs, query))
+        # Platform name mapping
+        platform_names = {
+            "netease": "网易云",
+            "qq": "QQ",
+            "kuwo": "酷我"
+        }
+        
+        # Build response
+        root = create_subsonic_response("ok")
+        search_result = SubElement(root, result_elem_name)
+        
+        # Add artists (extract unique artists from songs)
+        if artist_count > 0:
+            seen_artists = set()
+            for song in all_songs[:artist_count * 3]:  # Look at more songs to find unique artists
+                artist_name = song.get("artist", "")
+                if artist_name and artist_name not in seen_artists:
+                    seen_artists.add(artist_name)
+                    if len(seen_artists) > artist_count:
+                        break
+                    
+                    song_id = song.get("id", "")
+                    platform = song_id.split(":")[0] if ":" in song_id else ""
+                    
+                    artist_elem = SubElement(search_result, "artist")
+                    artist_elem.set("id", f"ar-{song_id}")  # Use song ID as artist ID
+                    display_name = artist_name
+                    if platform in platform_names:
+                        display_name = f"{platform_names[platform]} - {artist_name}"
+                    artist_elem.set("name", display_name)
+                    artist_elem.set("coverArt", f"ar-{song_id}")
+                    artist_elem.set("albumCount", "1")
+        
+        # Add albums (treat each song as its own album)
+        if album_count > 0:
+            for song in all_songs[:album_count]:
+                song_id = song.get("id", "")
+                platform = song_id.split(":")[0] if ":" in song_id else ""
+                
+                album_elem = SubElement(search_result, "album")
+                album_elem.set("id", song_id)  # Album ID = Song ID
+                album_name = song.get("album") or song.get("title", "Unknown")
+                if platform in platform_names:
+                    album_name = f"{platform_names[platform]} - {album_name}"
+                album_elem.set("name", album_name)
+                album_elem.set("artist", song.get("artist", "Unknown"))
+                album_elem.set("artistId", f"ar-{song_id}")
+                album_elem.set("coverArt", f"al-{song_id}")
+                album_elem.set("songCount", "1")
+                album_elem.set("duration", str(song.get("duration", 0)))
+                album_elem.set("created", "2024-01-01T00:00:00.000Z")
+        
+        # Add songs
+        if song_count > 0:
+            for song in all_songs[:song_count]:
+                song_elem = SubElement(search_result, "song")
+                
+                song_id = song.get("id", "")
+                platform = song_id.split(":")[0] if ":" in song_id else ""
+                
+                # Add platform prefix to artist name
+                display_song = song.copy()
+                original_artist = song.get("artist", "Unknown")
+                if platform in platform_names:
+                    display_song["artist"] = f"{platform_names[platform]} - {original_artist}"
+                
+                _set_song_attributes(song_elem, display_song)
+        
+        return make_response_from_element(root)
     
     except Exception as e:
         logger.error(f"Error searching: {e}")
@@ -538,6 +1044,8 @@ def search():
 
 @app.route("/rest/stream", methods=["GET"])
 @app.route("/rest/stream.view", methods=["GET"])
+@app.route("/rest/download", methods=["GET"])
+@app.route("/rest/download.view", methods=["GET"])
 @require_auth
 def stream():
     """Stream a song - redirects to actual music URL (cached for 6 hours)"""
@@ -629,6 +1137,16 @@ def stream():
             logger.info(f"[CACHED] Stored stream URL and metadata for {song_id}")
             save_cache() # Persist immediately
             
+            # Log credit usage
+            log_credit_usage(
+                platform=platform,
+                song_id=actual_id,
+                title=metadata["title"],
+                artist=strip_platform_prefix(metadata["artist"]),
+                file_size=0,  # File size unknown until download completes
+                quality=quality
+            )
+            
             # Start background download to local cache for future plays
             def download_audio_background(url, song_id, quality):
                 import requests as req  # Import inside thread
@@ -712,6 +1230,82 @@ def get_song():
         return make_response_from_element(format_error(0, str(e)))
 
 
+@app.route("/rest/getAlbum", methods=["GET"])
+@app.route("/rest/getAlbum.view", methods=["GET"])
+@require_auth
+def get_album():
+    """Get album details - returns song as album for compatibility with Amperfy"""
+    from xml.etree.ElementTree import SubElement
+    try:
+        album_id = request.args.get("id", "")
+        
+        if not album_id:
+            return make_response_from_element(format_error(10, "Required parameter is missing: id"))
+        
+        # In our implementation, album_id is the same as song_id
+        song_id = album_id
+        
+        # Check if we have cached metadata
+        cached_metadata = get_cached(song_metadata_cache, song_id)
+        if cached_metadata:
+            logger.info(f"[CACHE HIT] Returning cached album for {song_id}")
+        else:
+            # Return basic placeholder
+            cached_metadata = {
+                "id": song_id,
+                "title": "Unknown Album",
+                "artist": "Unknown Artist",
+            }
+        
+        # Format as album response with the song as its only track
+        root = create_subsonic_response("ok")
+        album_elem = SubElement(root, "album")
+        album_elem.set("id", song_id)
+        
+        # Strip platform prefix for cleaner display in playback interface
+        raw_artist = cached_metadata.get("artist", "Unknown")
+        raw_album = cached_metadata.get("album") or cached_metadata.get("title", "Unknown")
+        clean_artist = strip_platform_prefix(raw_artist)
+        clean_album = strip_platform_prefix(raw_album)
+        
+        album_elem.set("name", clean_album)
+        album_elem.set("artist", clean_artist)
+        album_elem.set("artistId", "")
+        album_elem.set("songCount", "1")
+        album_elem.set("duration", str(cached_metadata.get("duration", 0)))
+        album_elem.set("created", "2024-01-01T00:00:00.000Z")
+        album_elem.set("coverArt", f"al-{song_id}")
+        
+        # Add the song as entry
+        song_elem = SubElement(album_elem, "song")
+        song_elem.set("id", song_id)
+        song_elem.set("parent", song_id)  # Required by some clients
+        song_elem.set("title", cached_metadata.get("title", "Unknown"))
+        song_elem.set("artist", clean_artist)
+        song_elem.set("album", clean_album)
+        song_elem.set("albumId", song_id)
+        song_elem.set("duration", str(cached_metadata.get("duration", 0)))
+        song_elem.set("track", "1")  # Track number
+        song_elem.set("year", "2024")
+        song_elem.set("genre", "Pop")
+        song_elem.set("isDir", "false")
+        song_elem.set("coverArt", song_id)  # Use song_id directly instead of al- prefix
+        song_elem.set("suffix", "flac")
+        song_elem.set("contentType", "audio/flac")
+        song_elem.set("bitRate", "1411")
+        song_elem.set("size", "30000000")  # Approximate file size
+        song_elem.set("path", f"music/{song_id}.flac")  # Fake path
+        song_elem.set("type", "music")
+        song_elem.set("isVideo", "false")
+        song_elem.set("created", "2024-01-01T00:00:00")
+        
+        return make_response_from_element(root)
+    
+    except Exception as e:
+        logger.error(f"Error getting album: {e}")
+        return make_response_from_element(format_error(0, str(e)))
+
+
 @app.route("/rest/getCoverArt", methods=["GET"])
 @app.route("/rest/getCoverArt.view", methods=["GET"])
 @require_auth
@@ -741,8 +1335,23 @@ def get_cover_art():
             elif platform == "qq":
                 cover_url = "https://y.qq.com/mediastyle/global/img/album_300.png"
             else:
-                cover_url = "https://via.placeholder.com/300x300?text=TuneHub"
+                cover_url = "https://y.qq.com/mediastyle/global/img/album_300.png"
     
+    # Handle artist cover (format: ar-platform:songId) - we use song cover as artist fallback
+    elif cover_id.startswith("ar-"):
+        artist_ref = cover_id[3:]  # Remove "ar-" prefix
+        # artist_ref should be like "platform:songId"
+        cached_metadata = get_cached(song_metadata_cache, artist_ref)
+        if cached_metadata and cached_metadata.get("coverUrl"):
+            cover_url = cached_metadata["coverUrl"]
+        elif ":" in artist_ref:
+            platform, song_id = artist_ref.split(":", 1)
+            if platform == "netease":
+                cover_url = f"https://p1.music.126.net/song_cover_{song_id}.jpg"
+            else:
+                # Use QQ default album image as fallback (more reliable than placeholder)
+                cover_url = "https://y.qq.com/mediastyle/global/img/album_300.png"
+
     # Handle album cover (format: al-platform:songId) - used by some Subsonic clients
     # albumId is set to song ID in our implementation
     elif cover_id.startswith("al-"):
@@ -755,10 +1364,8 @@ def get_cover_art():
             platform, song_id = album_id.split(":", 1)
             if platform == "netease":
                 cover_url = f"https://p1.music.126.net/song_cover_{song_id}.jpg"
-            elif platform == "qq":
-                cover_url = "https://y.qq.com/mediastyle/global/img/album_300.png"
             else:
-                cover_url = "https://via.placeholder.com/300x300?text=Music"
+                cover_url = "https://y.qq.com/mediastyle/global/img/album_300.png"
     
     # Handle song cover (format: platform:songId)
     elif ":" in cover_id:
@@ -770,10 +1377,8 @@ def get_cover_art():
             platform, song_id = cover_id.split(":", 1)
             if platform == "netease":
                 cover_url = f"https://p1.music.126.net/song_cover_{song_id}.jpg"
-            elif platform == "qq":
-                cover_url = "https://y.qq.com/mediastyle/global/img/album_300.png"
             else:
-                cover_url = "https://via.placeholder.com/300x300?text=Music"
+                cover_url = "https://y.qq.com/mediastyle/global/img/album_300.png"
     
     if not cover_url:
         return Response(status=404)

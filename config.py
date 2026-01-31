@@ -39,14 +39,9 @@ PLATFORMS = {
 ALLOWED_PLAYLISTS = {
     "netease": [
         "19723756",   # 飙升榜
-        "3779629",    # 新歌榜
-        "2884035",    # 原创榜
         "3778678",    # 热歌榜
         "991319590",  # 中文说唱榜
-        "745956260",  # 韩语榜
-        "180106",     # UK排行榜周榜
         "60198",      # 美国Billboard榜
-        "5059644681", # 日语榜
     ],
     "qq": [],  # QQ toplist API not working (returns error 10006)
     "kuwo": [],  # Excluded per user request
