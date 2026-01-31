@@ -60,17 +60,62 @@ DATA_DIR = os.environ.get("CACHE_DIR", os.path.dirname(__file__))
 AUDIO_CACHE_DIR = os.path.join(DATA_DIR, "audio")
 os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 
-def get_audio_cache_path(song_id: str, quality: str) -> str:
-    """Get the local file path for a cached audio file"""
-    # Sanitize song_id for filesystem (replace : with _)
-    safe_id = song_id.replace(":", "_").replace("/", "_")
+def sanitize_filename(name: str) -> str:
+    """Sanitize a string for use in a filename, removing or replacing unsafe characters"""
+    if not name:
+        return ""
+    # Replace unsafe characters with underscores
+    unsafe_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t']
+    result = name
+    for char in unsafe_chars:
+        result = result.replace(char, '_')
+    # Remove leading/trailing spaces and dots
+    result = result.strip(' .')
+    # Limit length to avoid too long filenames
+    if len(result) > 50:
+        result = result[:50]
+    return result
+
+def get_audio_cache_path(song_id: str, quality: str, metadata: dict = None) -> str:
+    """Get the local file path for a cached audio file
+    
+    If metadata is provided, uses format: 歌曲_歌手_专辑_platform_id_quality.ext
+    Otherwise falls back to: platform_id_quality.ext
+    """
     # Use appropriate extension based on quality
     ext = "flac" if quality in ("flac", "flac24bit") else "mp3"
-    return os.path.join(AUDIO_CACHE_DIR, f"{safe_id}_{quality}.{ext}")
+    
+    # Parse platform and actual_id from song_id (format: platform:actual_id)
+    if ":" in song_id:
+        platform, actual_id = song_id.split(":", 1)
+    else:
+        platform = "unknown"
+        actual_id = song_id
+    
+    # Sanitize actual_id for filesystem
+    safe_id = actual_id.replace("/", "_")
+    
+    if metadata:
+        # Use friendly format: 歌曲_歌手_专辑_platform_id_quality.ext
+        title = sanitize_filename(metadata.get("title", ""))
+        artist = sanitize_filename(strip_platform_prefix(metadata.get("artist", "")))
+        album = sanitize_filename(metadata.get("album", ""))
+        
+        if title and artist:
+            # Build filename parts
+            parts = [title, artist]
+            if album:
+                parts.append(album)
+            parts.extend([platform, safe_id, quality])
+            filename = "_".join(parts) + f".{ext}"
+            return os.path.join(AUDIO_CACHE_DIR, filename)
+    
+    # Fallback to simple format
+    return os.path.join(AUDIO_CACHE_DIR, f"{platform}_{safe_id}_{quality}.{ext}")
 
-def is_audio_cached(song_id: str, quality: str) -> bool:
+def is_audio_cached(song_id: str, quality: str, metadata: dict = None) -> bool:
     """Check if audio file exists in local cache"""
-    path = get_audio_cache_path(song_id, quality)
+    path = get_audio_cache_path(song_id, quality, metadata)
     return os.path.exists(path) and os.path.getsize(path) > 0
 
 def get_audio_cache_size() -> int:
@@ -1107,10 +1152,19 @@ def stream():
             except ValueError:
                 pass
         
+        # Get cached metadata for friendly filename
+        cached_metadata = get_cached(song_metadata_cache, song_id)
+        
         # Check LOCAL AUDIO CACHE first - serves from disk, no API call needed
-        if is_audio_cached(song_id, quality):
-            audio_path = get_audio_cache_path(song_id, quality)
+        # First try with metadata (new friendly format)
+        if cached_metadata and is_audio_cached(song_id, quality, cached_metadata):
+            audio_path = get_audio_cache_path(song_id, quality, cached_metadata)
             logger.info(f"[LOCAL CACHE HIT] Serving audio from disk: {song_id}")
+            return send_file(audio_path, mimetype='audio/mpeg')
+        # Also check legacy format (without metadata) for backward compatibility
+        elif is_audio_cached(song_id, quality, None):
+            audio_path = get_audio_cache_path(song_id, quality, None)
+            logger.info(f"[LOCAL CACHE HIT] Serving audio from disk (legacy): {song_id}")
             return send_file(audio_path, mimetype='audio/mpeg')
         
         # Check URL cache second - still saves API call within 30 min window
@@ -1175,11 +1229,11 @@ def stream():
             )
             
             # Start background download to local cache for future plays
-            def download_audio_background(url, song_id, quality):
+            def download_audio_background(url, song_id, quality, song_metadata):
                 import requests as req  # Import inside thread
                 try:
-                    audio_path = get_audio_cache_path(song_id, quality)
-                    logger.info(f"[DOWNLOAD] Starting background download: {song_id}")
+                    audio_path = get_audio_cache_path(song_id, quality, song_metadata)
+                    logger.info(f"[DOWNLOAD] Starting background download: {song_id} -> {os.path.basename(audio_path)}")
                     
                     # Download the audio file
                     audio_response = req.get(url, timeout=120, stream=True)
@@ -1206,7 +1260,7 @@ def stream():
             import threading
             download_thread = threading.Thread(
                 target=download_audio_background, 
-                args=(stream_url, song_id, quality),
+                args=(stream_url, song_id, quality, metadata),
                 daemon=True
             )
             download_thread.start()
