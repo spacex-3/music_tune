@@ -220,9 +220,15 @@ class TuneHubClient:
             "quality": quality,
         }
         
-        response = requests.post(url, json=payload, headers=self.headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
+        try:
+            # Increased timeout to 30s for slow API responses
+            response = requests.post(url, json=payload, headers=self.headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+        except requests.exceptions.Timeout:
+            raise Exception(f"TuneHub API timeout after 30s for {platform}:{song_id}")
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"TuneHub API request failed: {e}")
         
         if data.get("code") != 0:
             raise Exception(f"TuneHub parse error: {data.get('message', 'Unknown error')}")
