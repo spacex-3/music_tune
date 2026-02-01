@@ -1315,7 +1315,7 @@ def stream():
             metadata = {
                 "id": song_id,
                 "title": song_info.get("name", "Unknown"),
-                "artist": song_info.get("artist", "Unknown"),
+                "artist": strip_platform_prefix(song_info.get("artist", "Unknown")),  # Remove platform prefix
                 "album": song_info.get("album", ""),
                 "duration": song_info.get("duration", 0),
                 "coverUrl": song_data.get("cover", ""),

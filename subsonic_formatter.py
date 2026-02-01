@@ -171,7 +171,11 @@ def _set_song_attributes(elem: Element, song: Dict[str, Any]) -> None:
     elem.set("parent", "1")
     elem.set("title", song.get("title", "Unknown"))
     elem.set("album", song.get("album", "") or song.get("title", "Unknown"))
-    elem.set("artist", song.get("artist", "Unknown"))
+    # Strip platform prefix from artist name (e.g., "qq:周杰伦" -> "周杰伦")
+    artist = song.get("artist", "Unknown")
+    if ":" in artist and artist.split(":")[0].lower() in ("netease", "qq", "kuwo"):
+        artist = artist.split(":", 1)[1]
+    elem.set("artist", artist)
     elem.set("isDir", "false")
     elem.set("duration", str(song.get("duration", 0)))
     elem.set("track", "1")
