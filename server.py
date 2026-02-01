@@ -804,6 +804,31 @@ def get_lyrics_by_song_id():
         except Exception as e:
             logger.warning(f"[LYRICS] Failed to fetch: {e}")
     
+    # If not in cache and is QQ music, fetch from free API
+    elif song_id.startswith("qq:"):
+        try:
+            import requests
+            actual_id = song_id.split(":")[1]
+            url = f"https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid={actual_id}&format=json&nobase64=1"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                "Referer": "https://y.qq.com/"
+            }
+            resp = requests.get(url, headers=headers, timeout=5)
+            if resp.ok:
+                data = resp.json()
+                lrc_text = data.get("lyric", "")
+                
+                if lrc_text:
+                    # Cache the lyrics
+                    if not cached_metadata:
+                        cached_metadata = {"id": song_id, "artist": artist, "title": title}
+                    cached_metadata["lyrics"] = lrc_text
+                    set_cached(song_metadata_cache, song_id, cached_metadata)
+                    logger.info(f"[LYRICS] Fetched and cached QQ lyrics for {song_id}")
+        except Exception as e:
+            logger.warning(f"[LYRICS] Failed to fetch QQ lyrics: {e}")
+    
     # Build OpenSubsonic structured lyrics response
     root = create_subsonic_response("ok")
     root.set("openSubsonic", "true")
