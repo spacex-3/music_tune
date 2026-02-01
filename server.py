@@ -1176,15 +1176,21 @@ def stream():
         
         # Check if request is already pending (prevent race condition)
         with cache_lock:
-            if cache_key in pending_requests:
-                logger.info(f"[PENDING] Request already in progress for {song_id}, waiting...")
-                # Wait a bit and try cache again
-                import time as time_module
-                time_module.sleep(0.5)
-                cached_url = get_cached(stream_url_cache, cache_key, ttl=1800)
-                if cached_url:
-                    return redirect(cached_url, code=302)
-            pending_requests.add(cache_key)
+            is_pending = cache_key in pending_requests
+            if not is_pending:
+                pending_requests.add(cache_key)
+        
+        if is_pending:
+            logger.info(f"[PENDING] Request already in progress for {song_id}, waiting...")
+            # Wait a bit and try cache again (OUTSIDE the lock to avoid deadlock)
+            import time as time_module
+            time_module.sleep(0.5)
+            cached_url = get_cached(stream_url_cache, cache_key, ttl=1800)
+            if cached_url:
+                return redirect(cached_url, code=302)
+            # If still no cache, add ourselves to pending and proceed
+            with cache_lock:
+                pending_requests.add(cache_key)
         
         try:
             # Parse song to get real URL (consumes 1 credit)
