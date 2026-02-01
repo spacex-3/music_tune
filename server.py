@@ -211,7 +211,72 @@ def save_cache():
         except Exception as e:
             logger.error(f"Failed to save cache: {e}")
 
+# ============ Scheduled Playlist Refresh ============
+PLAYLIST_REFRESH_INTERVAL = int(os.environ.get("PLAYLIST_REFRESH_HOURS", "3")) * 60 * 60  # Default: 3 hours
+
+def refresh_playlist_cache():
+    """Background task to refresh playlist cache periodically"""
+    import time as time_module
+    
+    while True:
+        try:
+            time_module.sleep(PLAYLIST_REFRESH_INTERVAL)
+            logger.info(f"[SCHEDULED REFRESH] Starting playlist cache refresh...")
+            
+            # Clear all playlist caches to force fresh API calls
+            with cache_lock:
+                keys_to_remove = [k for k in playlist_cache if k.startswith(('playlists_', 'netease_', 'qq_', 'kuwo_'))]
+                removed_count = 0
+                for k in keys_to_remove:
+                    del playlist_cache[k]
+                    removed_count += 1
+            
+            if removed_count > 0:
+                logger.info(f"[SCHEDULED REFRESH] Cleared {removed_count} playlist cache entries")
+                save_cache()
+            
+            # Pre-fetch playlists for all configured platforms
+            from config import ALLOWED_PLAYLISTS
+            for platform, playlist_ids in ALLOWED_PLAYLISTS.items():
+                if not playlist_ids:
+                    continue
+                try:
+                    # Fetch toplists for this platform
+                    toplists = tunehub_client.get_toplists(platform)
+                    logger.info(f"[SCHEDULED REFRESH] Fetched {len(toplists)} toplists for {platform}")
+                    
+                    # Fetch detail for each allowed playlist
+                    for toplist in toplists:
+                        tid = toplist.get('id', '')
+                        if tid in playlist_ids:
+                            try:
+                                detail = tunehub_client.get_toplist_detail(platform, tid)
+                                song_count = len(detail.get('songs', []))
+                                cache_key = f"{platform}_{tid}"
+                                set_cached(playlist_cache, cache_key, {
+                                    'info': toplist,
+                                    'songs': detail.get('songs', [])
+                                })
+                                logger.info(f"[SCHEDULED REFRESH] Cached {cache_key} with {song_count} songs")
+                            except Exception as e:
+                                logger.error(f"[SCHEDULED REFRESH] Failed to fetch {platform}_{tid}: {e}")
+                except Exception as e:
+                    logger.error(f"[SCHEDULED REFRESH] Failed to fetch toplists for {platform}: {e}")
+            
+            save_cache()
+            logger.info(f"[SCHEDULED REFRESH] Completed. Next refresh in {PLAYLIST_REFRESH_INTERVAL // 3600} hours")
+            
+        except Exception as e:
+            logger.error(f"[SCHEDULED REFRESH] Error: {e}")
+
+def start_playlist_refresh_scheduler():
+    """Start the background playlist refresh thread"""
+    refresh_thread = threading.Thread(target=refresh_playlist_cache, daemon=True, name="PlaylistRefresher")
+    refresh_thread.start()
+    logger.info(f"[SCHEDULER] Playlist auto-refresh enabled: every {PLAYLIST_REFRESH_INTERVAL // 3600} hours")
+
 # Note: Cache initialization is done after werkzeug reloader check below
+
 
 # ============ User Data Storage (Playlists, Starred, Ratings) ============
 USER_DATA_FILE = os.path.join(DATA_DIR, "user_data.json")
@@ -2037,5 +2102,8 @@ if __name__ == "__main__":
     logger.info(f"Username: {SUBSONIC_USER}")
     logger.info(f"Default platform: {DEFAULT_PLATFORM}")
     logger.info(f"Default quality: {DEFAULT_QUALITY}")
+    
+    # Start background playlist refresh scheduler
+    start_playlist_refresh_scheduler()
     
     app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False)
