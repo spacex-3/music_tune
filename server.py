@@ -1182,15 +1182,31 @@ def stream():
         
         if is_pending:
             logger.info(f"[PENDING] Request already in progress for {song_id}, waiting...")
-            # Wait a bit and try cache again (OUTSIDE the lock to avoid deadlock)
+            # Wait for the other request to finish (with retries, max 35s which is longer than API timeout of 30s)
             import time as time_module
-            time_module.sleep(0.5)
-            cached_url = get_cached(stream_url_cache, cache_key, ttl=1800)
-            if cached_url:
-                return redirect(cached_url, code=302)
-            # If still no cache, add ourselves to pending and proceed
-            with cache_lock:
-                pending_requests.add(cache_key)
+            max_wait = 35  # seconds
+            wait_interval = 0.5  # seconds
+            waited = 0
+            while waited < max_wait:
+                time_module.sleep(wait_interval)
+                waited += wait_interval
+                cached_url = get_cached(stream_url_cache, cache_key, ttl=1800)
+                if cached_url:
+                    logger.info(f"[PENDING RESOLVED] Found cached URL for {song_id} after {waited:.1f}s")
+                    return redirect(cached_url, code=302)
+                # Check if still pending
+                with cache_lock:
+                    if cache_key not in pending_requests:
+                        # The other request finished but didn't cache (maybe failed)
+                        # We should try again
+                        pending_requests.add(cache_key)
+                        logger.info(f"[PENDING EXPIRED] Other request finished without caching for {song_id}, taking over...")
+                        break
+            else:
+                # Timeout - the other request might have failed, try ourselves
+                logger.warning(f"[PENDING TIMEOUT] Waited {max_wait}s for {song_id}, proceeding with own API call...")
+                with cache_lock:
+                    pending_requests.add(cache_key)
         
         try:
             # Parse song to get real URL (consumes 1 credit)
