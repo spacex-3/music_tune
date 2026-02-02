@@ -1152,11 +1152,16 @@ def search():
         root = create_subsonic_response("ok")
         search_result = SubElement(root, result_elem_name)
         
-        # Add artists using real artist search API
+        # Determine which platform to use for artist/album search based on SEARCH_PLATFORMS
+        search_platform = "qq" if SEARCH_PLATFORMS != "netease" else "netease"
+        
+        # Add artists using real artist search API (only for QQ for now)
         if artist_count > 0:
             try:
-                # Try to fetch real artists from QQ Music API
-                artists = tunehub_client.search_artists("qq", query, page_size=artist_count)
+                artists = []
+                # Only QQ Music API supports true artist search
+                if search_platform == "qq":
+                    artists = tunehub_client.search_artists("qq", query, page_size=artist_count)
                 
                 for artist in artists:
                     artist_elem = SubElement(search_result, "artist")
@@ -1211,11 +1216,12 @@ def search():
                         artist_elem.set("coverArt", f"ar-{song_id}")
                         artist_elem.set("albumCount", "1")
         
-        # Add albums using real album search API
+        # Add albums using real album search API (only for QQ for now)
         if album_count > 0:
             try:
-                # Try to fetch real albums from QQ Music API
-                albums = tunehub_client.search_albums("qq", query, page_size=album_count)
+                albums = []
+                if search_platform == "qq":
+                    albums = tunehub_client.search_albums("qq", query, page_size=album_count)
                 
                 for album in albums:
                     album_elem = SubElement(search_result, "album")
@@ -1539,12 +1545,14 @@ def get_album():
             platform = "qq"
             actual_mid = album_ref
         
-        # Try to fetch real album data from QQ Music
+        # Only try to fetch real album data if album_id starts with "al-" (from album search)
+        # This avoids unnecessary API calls for song IDs from playlists
         album_info = None
         songs = []
+        is_real_album_id = album_id.startswith("al-")
         
-        if platform == "qq":
-            logger.info(f"[ALBUM] Trying to fetch album from QQ Music: {actual_mid}")
+        if is_real_album_id and platform == "qq":
+            logger.info(f"[ALBUM] Fetching real album from QQ Music: {actual_mid}")
             try:
                 result = tunehub_client.get_album_songs(platform, actual_mid)
                 album_info = result.get("album")

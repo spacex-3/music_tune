@@ -588,7 +588,7 @@ class TuneHubClient:
                 # Parse songs
                 songs = []
                 for track in song_list:
-                    songs.append(self._normalize_track(track, "qq"))
+                    songs.append(self._normalize_song("qq", track))
                 
                 return {
                     "artist": {
@@ -610,46 +610,36 @@ class TuneHubClient:
     def get_album_songs(self, platform: str, album_mid: str) -> Dict[str, Any]:
         """Get songs from an album using QQ Music API"""
         if platform == "qq":
-            url = "https://u.y.qq.com/cgi-bin/musicu.fcg"
-            body = {
-                "req_1": {
-                    "module": "music.musichallAlbum.AlbumInfoServer",
-                    "method": "GetAlbumDetail",
-                    "param": {
-                        "albumMid": album_mid
-                    }
-                }
-            }
-            headers = {"Content-Type": "application/json", "Referer": "https://y.qq.com/"}
-            response = requests.post(url, json=body, headers=headers, timeout=10)
+            # Use the fcg album info API which returns song list
+            url = f"https://i.y.qq.com/v8/fcg-bin/fcg_v8_album_info_cp.fcg?albummid={album_mid}&format=json"
+            headers = {"Referer": "https://y.qq.com/"}
+            response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
             result = response.json()
             
             try:
-                data = result.get("req_1", {}).get("data", {})
-                album_info = data.get("basicInfo", {})
-                song_list = data.get("songList", [])
+                data = result.get("data", {})
+                song_list = data.get("list", [])
                 
-                # Get artist info
-                singers = album_info.get("singer", {}).get("singerList", [])
-                artist_name = ", ".join([s.get("name", "") for s in singers]) if singers else "Unknown"
+                # Get album info
+                album_name = data.get("name", "Unknown")
+                artist_name = data.get("singername", "Unknown")
+                publish_date = data.get("aDate", "")
                 
                 # Parse songs
                 songs = []
-                for item in song_list:
-                    track = item.get("songInfo", item)
-                    songs.append(self._normalize_track(track, "qq"))
+                for track in song_list:
+                    songs.append(self._normalize_song("qq", track))
                 
                 cover_url = f"https://y.qq.com/music/photo_new/T002R300x300M000{album_mid}.jpg"
                 
                 return {
                     "album": {
                         "id": f"qq:{album_mid}",
-                        "name": album_info.get("albumName", "Unknown"),
+                        "name": album_name,
                         "artist": artist_name,
                         "coverUrl": cover_url,
-                        "publishDate": album_info.get("publishDate", ""),
-                        "description": album_info.get("desc", "")
+                        "publishDate": publish_date,
                     },
                     "songs": songs,
                     "total": len(songs)
@@ -660,6 +650,7 @@ class TuneHubClient:
                 return {"album": {"id": f"qq:{album_mid}", "name": "Unknown"}, "songs": [], "total": 0}
         
         return {"album": {"id": f"{platform}:{album_mid}", "name": "Unknown"}, "songs": [], "total": 0}
+
 
 
 # Global client instance
