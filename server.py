@@ -2415,6 +2415,7 @@ if __name__ == "__main__":
     logger.info(f"Starting TuneHub Subsonic Proxy on {SERVER_HOST}:{SERVER_PORT}")
     logger.info(f"Username: {SUBSONIC_USER}")
     logger.info(f"Default platform: {DEFAULT_PLATFORM}")
+    logger.info(f"Search platforms: {SEARCH_PLATFORMS}")
     logger.info(f"Default quality: {DEFAULT_QUALITY}")
     
     # Start background playlist refresh scheduler
