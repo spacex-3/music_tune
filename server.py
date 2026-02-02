@@ -1152,46 +1152,121 @@ def search():
         root = create_subsonic_response("ok")
         search_result = SubElement(root, result_elem_name)
         
-        # Add artists (extract unique artists from songs)
+        # Add artists using real artist search API
         if artist_count > 0:
-            seen_artists = set()
-            for song in all_songs[:artist_count * 3]:  # Look at more songs to find unique artists
-                artist_name = song.get("artist", "")
-                if artist_name and artist_name not in seen_artists:
-                    seen_artists.add(artist_name)
-                    if len(seen_artists) > artist_count:
-                        break
-                    
+            try:
+                # Try to fetch real artists from QQ Music API
+                artists = tunehub_client.search_artists("qq", query, page_size=artist_count)
+                
+                for artist in artists:
+                    artist_elem = SubElement(search_result, "artist")
+                    artist_id = artist.get("id", "")
+                    artist_elem.set("id", f"ar-{artist_id}")
+                    display_name = f"QQ - {artist.get('name', 'Unknown')}"
+                    artist_elem.set("name", display_name)
+                    artist_elem.set("coverArt", f"ar-{artist_id}")
+                    artist_elem.set("albumCount", str(artist.get("albumCount", 0)))
+                
+                # If no results from QQ Music, fallback to extracting from songs
+                if not artists and all_songs:
+                    seen_artists = set()
+                    for song in all_songs[:artist_count * 3]:
+                        artist_name = song.get("artist", "")
+                        if artist_name and artist_name not in seen_artists:
+                            seen_artists.add(artist_name)
+                            if len(seen_artists) > artist_count:
+                                break
+                            
+                            song_id = song.get("id", "")
+                            platform = song_id.split(":")[0] if ":" in song_id else ""
+                            
+                            artist_elem = SubElement(search_result, "artist")
+                            artist_elem.set("id", f"ar-{song_id}")
+                            display_name = artist_name
+                            if platform in platform_names:
+                                display_name = f"{platform_names[platform]} - {artist_name}"
+                            artist_elem.set("name", display_name)
+                            artist_elem.set("coverArt", f"ar-{song_id}")
+                            artist_elem.set("albumCount", "1")
+            except Exception as e:
+                logger.warning(f"Artist search failed, using fallback: {e}")
+                # Fallback to old behavior
+                seen_artists = set()
+                for song in all_songs[:artist_count * 3]:
+                    artist_name = song.get("artist", "")
+                    if artist_name and artist_name not in seen_artists:
+                        seen_artists.add(artist_name)
+                        if len(seen_artists) > artist_count:
+                            break
+                        
+                        song_id = song.get("id", "")
+                        platform = song_id.split(":")[0] if ":" in song_id else ""
+                        
+                        artist_elem = SubElement(search_result, "artist")
+                        artist_elem.set("id", f"ar-{song_id}")
+                        display_name = artist_name
+                        if platform in platform_names:
+                            display_name = f"{platform_names[platform]} - {artist_name}"
+                        artist_elem.set("name", display_name)
+                        artist_elem.set("coverArt", f"ar-{song_id}")
+                        artist_elem.set("albumCount", "1")
+        
+        # Add albums using real album search API
+        if album_count > 0:
+            try:
+                # Try to fetch real albums from QQ Music API
+                albums = tunehub_client.search_albums("qq", query, page_size=album_count)
+                
+                for album in albums:
+                    album_elem = SubElement(search_result, "album")
+                    album_id = album.get("id", "")
+                    album_elem.set("id", f"al-{album_id}")
+                    album_name = f"QQ - {album.get('name', 'Unknown')}"
+                    album_elem.set("name", album_name)
+                    album_elem.set("artist", album.get("artist", "Unknown"))
+                    album_elem.set("artistId", "")
+                    album_elem.set("coverArt", f"al-{album_id}")
+                    album_elem.set("songCount", str(album.get("songCount", 0)))
+                    album_elem.set("duration", "0")
+                    album_elem.set("created", "2024-01-01T00:00:00.000Z")
+                
+                # If no results from QQ Music, fallback to extracting from songs
+                if not albums and all_songs:
+                    for song in all_songs[:album_count]:
+                        song_id = song.get("id", "")
+                        platform = song_id.split(":")[0] if ":" in song_id else ""
+                        
+                        album_elem = SubElement(search_result, "album")
+                        album_elem.set("id", song_id)
+                        album_name = song.get("album") or song.get("title", "Unknown")
+                        if platform in platform_names:
+                            album_name = f"{platform_names[platform]} - {album_name}"
+                        album_elem.set("name", album_name)
+                        album_elem.set("artist", song.get("artist", "Unknown"))
+                        album_elem.set("artistId", f"ar-{song_id}")
+                        album_elem.set("coverArt", f"al-{song_id}")
+                        album_elem.set("songCount", "1")
+                        album_elem.set("duration", str(song.get("duration", 0)))
+                        album_elem.set("created", "2024-01-01T00:00:00.000Z")
+            except Exception as e:
+                logger.warning(f"Album search failed, using fallback: {e}")
+                # Fallback to old behavior
+                for song in all_songs[:album_count]:
                     song_id = song.get("id", "")
                     platform = song_id.split(":")[0] if ":" in song_id else ""
                     
-                    artist_elem = SubElement(search_result, "artist")
-                    artist_elem.set("id", f"ar-{song_id}")  # Use song ID as artist ID
-                    display_name = artist_name
+                    album_elem = SubElement(search_result, "album")
+                    album_elem.set("id", song_id)
+                    album_name = song.get("album") or song.get("title", "Unknown")
                     if platform in platform_names:
-                        display_name = f"{platform_names[platform]} - {artist_name}"
-                    artist_elem.set("name", display_name)
-                    artist_elem.set("coverArt", f"ar-{song_id}")
-                    artist_elem.set("albumCount", "1")
-        
-        # Add albums (treat each song as its own album)
-        if album_count > 0:
-            for song in all_songs[:album_count]:
-                song_id = song.get("id", "")
-                platform = song_id.split(":")[0] if ":" in song_id else ""
-                
-                album_elem = SubElement(search_result, "album")
-                album_elem.set("id", song_id)  # Album ID = Song ID
-                album_name = song.get("album") or song.get("title", "Unknown")
-                if platform in platform_names:
-                    album_name = f"{platform_names[platform]} - {album_name}"
-                album_elem.set("name", album_name)
-                album_elem.set("artist", song.get("artist", "Unknown"))
-                album_elem.set("artistId", f"ar-{song_id}")
-                album_elem.set("coverArt", f"al-{song_id}")
-                album_elem.set("songCount", "1")
-                album_elem.set("duration", str(song.get("duration", 0)))
-                album_elem.set("created", "2024-01-01T00:00:00.000Z")
+                        album_name = f"{platform_names[platform]} - {album_name}"
+                    album_elem.set("name", album_name)
+                    album_elem.set("artist", song.get("artist", "Unknown"))
+                    album_elem.set("artistId", f"ar-{song_id}")
+                    album_elem.set("coverArt", f"al-{song_id}")
+                    album_elem.set("songCount", "1")
+                    album_elem.set("duration", str(song.get("duration", 0)))
+                    album_elem.set("created", "2024-01-01T00:00:00.000Z")
         
         # Add songs
         if song_count > 0:
@@ -1441,7 +1516,7 @@ def get_song():
 @app.route("/rest/getAlbum.view", methods=["GET"])
 @require_auth
 def get_album():
-    """Get album details - returns song as album for compatibility with Amperfy"""
+    """Get album details - fetches from QQ Music API if possible, otherwise falls back to song metadata"""
     from xml.etree.ElementTree import SubElement
     try:
         album_id = request.args.get("id", "")
@@ -1449,8 +1524,89 @@ def get_album():
         if not album_id:
             return make_response_from_element(format_error(10, "Required parameter is missing: id"))
         
-        # In our implementation, album_id is the same as song_id
+        # Parse album ID - format could be:
+        # - "al-platform:album_mid" (from search results)
+        # - "qq:album_mid" (direct album ID)
+        # - "qq:song_mid" (old format, treat song as album)
+        album_ref = album_id
+        if album_id.startswith("al-"):
+            album_ref = album_id[3:]  # Remove "al-" prefix
+        
+        # Parse platform and mid
+        if ":" in album_ref:
+            platform, actual_mid = album_ref.split(":", 1)
+        else:
+            platform = "qq"
+            actual_mid = album_ref
+        
+        # Try to fetch real album data from QQ Music
+        album_info = None
+        songs = []
+        
+        if platform == "qq":
+            logger.info(f"[ALBUM] Trying to fetch album from QQ Music: {actual_mid}")
+            try:
+                result = tunehub_client.get_album_songs(platform, actual_mid)
+                album_info = result.get("album")
+                songs = result.get("songs", [])
+                
+                # Cache song metadata
+                for song in songs:
+                    song_id = song.get("id", "")
+                    if song_id:
+                        set_cached(song_metadata_cache, song_id, song)
+                
+                if album_info and songs:
+                    logger.info(f"[ALBUM] Found {len(songs)} songs in album {album_info.get('name', 'Unknown')}")
+            except Exception as e:
+                logger.warning(f"[ALBUM] Failed to fetch album from QQ Music: {e}")
+        
+        # If we got real album data, use it
+        if album_info and songs:
+            root = create_subsonic_response("ok")
+            album_elem = SubElement(root, "album")
+            album_elem.set("id", album_id)
+            album_elem.set("name", album_info.get("name", "Unknown Album"))
+            album_elem.set("artist", album_info.get("artist", "Unknown Artist"))
+            album_elem.set("artistId", "")
+            album_elem.set("songCount", str(len(songs)))
+            
+            total_duration = sum(s.get("duration", 0) for s in songs)
+            album_elem.set("duration", str(total_duration))
+            album_elem.set("created", "2024-01-01T00:00:00.000Z")
+            album_elem.set("coverArt", f"al-{platform}:{actual_mid}")
+            
+            # Add songs
+            for idx, song in enumerate(songs):
+                song_elem = SubElement(album_elem, "song")
+                song_id = song.get("id", "")
+                song_elem.set("id", song_id)
+                song_elem.set("parent", album_id)
+                song_elem.set("title", song.get("title", "Unknown"))
+                song_elem.set("artist", song.get("artist", "Unknown"))
+                song_elem.set("album", album_info.get("name", "Unknown"))
+                song_elem.set("albumId", album_id)
+                song_elem.set("duration", str(song.get("duration", 0)))
+                song_elem.set("track", str(idx + 1))
+                song_elem.set("year", album_info.get("publishDate", "2024")[:4] if album_info.get("publishDate") else "2024")
+                song_elem.set("genre", "Pop")
+                song_elem.set("isDir", "false")
+                song_elem.set("coverArt", song_id)
+                song_elem.set("suffix", "flac")
+                song_elem.set("contentType", "audio/flac")
+                song_elem.set("bitRate", "1411")
+                song_elem.set("size", "30000000")
+                song_elem.set("path", f"music/{song_id}.flac")
+                song_elem.set("type", "music")
+                song_elem.set("isVideo", "false")
+                song_elem.set("created", "2024-01-01T00:00:00")
+            
+            return make_response_from_element(root)
+        
+        # Fallback: treat song as album (old behavior)
         song_id = album_id
+        if album_id.startswith("al-"):
+            song_id = album_id[3:]
         
         # Check if we have cached metadata
         cached_metadata = get_cached(song_metadata_cache, song_id)
@@ -1486,22 +1642,22 @@ def get_album():
         # Add the song as entry
         song_elem = SubElement(album_elem, "song")
         song_elem.set("id", song_id)
-        song_elem.set("parent", song_id)  # Required by some clients
+        song_elem.set("parent", song_id)
         song_elem.set("title", cached_metadata.get("title", "Unknown"))
         song_elem.set("artist", clean_artist)
         song_elem.set("album", clean_album)
         song_elem.set("albumId", song_id)
         song_elem.set("duration", str(cached_metadata.get("duration", 0)))
-        song_elem.set("track", "1")  # Track number
+        song_elem.set("track", "1")
         song_elem.set("year", "2024")
         song_elem.set("genre", "Pop")
         song_elem.set("isDir", "false")
-        song_elem.set("coverArt", song_id)  # Use song_id directly instead of al- prefix
+        song_elem.set("coverArt", song_id)
         song_elem.set("suffix", "flac")
         song_elem.set("contentType", "audio/flac")
         song_elem.set("bitRate", "1411")
-        song_elem.set("size", "30000000")  # Approximate file size
-        song_elem.set("path", f"music/{song_id}.flac")  # Fake path
+        song_elem.set("size", "30000000")
+        song_elem.set("path", f"music/{song_id}.flac")
         song_elem.set("type", "music")
         song_elem.set("isVideo", "false")
         song_elem.set("created", "2024-01-01T00:00:00")
@@ -1729,6 +1885,117 @@ def get_artists():
     artists.set("ignoredArticles", "The El La Los Las Le Les")
     return make_response_from_element(root)
 
+
+@app.route("/rest/getArtist", methods=["GET"])
+@app.route("/rest/getArtist.view", methods=["GET"])
+@require_auth
+def get_artist():
+    """Get artist details and songs from QQ Music"""
+    from xml.etree.ElementTree import SubElement
+    from subsonic_formatter import create_subsonic_response, _set_song_attributes
+    
+    try:
+        artist_id = request.args.get("id", "")
+        
+        if not artist_id:
+            return make_response_from_element(format_error(10, "Required parameter is missing: id"))
+        
+        # Parse artist ID: format is "ar-platform:artist_mid" or "qq:artist_mid"
+        if artist_id.startswith("ar-"):
+            artist_ref = artist_id[3:]  # Remove "ar-" prefix
+        else:
+            artist_ref = artist_id
+        
+        # Parse platform and mid
+        if ":" in artist_ref:
+            platform, artist_mid = artist_ref.split(":", 1)
+        else:
+            platform = "qq"
+            artist_mid = artist_ref
+        
+        logger.info(f"[ARTIST] Fetching songs for {platform}:{artist_mid}")
+        
+        # Fetch artist data
+        result = tunehub_client.get_artist_songs(platform, artist_mid)
+        artist_info = result.get("artist", {})
+        songs = result.get("songs", [])
+        
+        # Cache song metadata
+        for song in songs:
+            song_id = song.get("id", "")
+            if song_id:
+                set_cached(song_metadata_cache, song_id, song)
+        
+        # Build response
+        root = create_subsonic_response("ok")
+        artist_elem = SubElement(root, "artist")
+        artist_elem.set("id", artist_id)
+        artist_elem.set("name", artist_info.get("name", "Unknown Artist"))
+        artist_elem.set("coverArt", f"ar-{platform}:{artist_mid}")
+        artist_elem.set("albumCount", str(artist_info.get("albumCount", 0)))
+        
+        # Add songs as albums (each song as its own album for Subsonic compatibility)
+        for song in songs:
+            album_elem = SubElement(artist_elem, "album")
+            song_id = song.get("id", "")
+            album_elem.set("id", song_id)
+            album_elem.set("name", song.get("album") or song.get("title", "Unknown"))
+            album_elem.set("artist", song.get("artist", "Unknown"))
+            album_elem.set("artistId", artist_id)
+            album_elem.set("coverArt", song_id)
+            album_elem.set("songCount", "1")
+            album_elem.set("duration", str(song.get("duration", 0)))
+            album_elem.set("created", "2024-01-01T00:00:00.000Z")
+        
+        return make_response_from_element(root)
+        
+    except Exception as e:
+        logger.error(f"Error getting artist: {e}")
+        return make_response_from_element(format_error(0, str(e)))
+
+
+@app.route("/rest/getArtistInfo", methods=["GET"])
+@app.route("/rest/getArtistInfo.view", methods=["GET"])
+@app.route("/rest/getArtistInfo2", methods=["GET"])
+@app.route("/rest/getArtistInfo2.view", methods=["GET"])
+@require_auth
+def get_artist_info():
+    """Get artist info - biography, similar artists, etc."""
+    from xml.etree.ElementTree import SubElement
+    from subsonic_formatter import create_subsonic_response
+    
+    artist_id = request.args.get("id", "")
+    
+    # Parse artist ID
+    if artist_id.startswith("ar-"):
+        artist_ref = artist_id[3:]
+    else:
+        artist_ref = artist_id
+    
+    if ":" in artist_ref:
+        platform, artist_mid = artist_ref.split(":", 1)
+    else:
+        platform = "qq"
+        artist_mid = artist_ref
+    
+    root = create_subsonic_response("ok")
+    info_elem = SubElement(root, "artistInfo2")
+    
+    # Fetch artist data for cover
+    try:
+        result = tunehub_client.get_artist_songs(platform, artist_mid, page_size=1)
+        artist_info = result.get("artist", {})
+        
+        # Add large image URLs for artist cover
+        cover_url = artist_info.get("coverUrl", "")
+        if cover_url:
+            SubElement(info_elem, "smallImageUrl").text = cover_url
+            SubElement(info_elem, "mediumImageUrl").text = cover_url
+            SubElement(info_elem, "largeImageUrl").text = cover_url
+    except Exception as e:
+        logger.warning(f"Error fetching artist info: {e}")
+    
+    return make_response_from_element(root)
 
 @app.route("/rest/getStarred", methods=["GET"])
 @app.route("/rest/getStarred.view", methods=["GET"])

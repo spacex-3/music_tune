@@ -449,6 +449,218 @@ class TuneHubClient:
         
         return {"id": f"{platform}:unknown", "title": "Unknown", "artist": "Unknown"}
 
+    def search_artists(self, platform: Optional[str], keyword: str, page: int = 1, page_size: int = 20) -> List[Dict[str, Any]]:
+        """Search for artists using QQ Music API with search_type: 9"""
+        platform = platform or DEFAULT_PLATFORM
+        
+        if platform == "qq":
+            url = "https://u.y.qq.com/cgi-bin/musicu.fcg"
+            body = {
+                "req_1": {
+                    "method": "DoSearchForQQMusicDesktop",
+                    "module": "music.search.SearchCgiService",
+                    "param": {
+                        "query": keyword,
+                        "page_num": page,
+                        "num_per_page": page_size,
+                        "search_type": 9  # 9 = singer/artist
+                    }
+                }
+            }
+            headers = {"Content-Type": "application/json", "Referer": "https://y.qq.com/"}
+            response = requests.post(url, json=body, headers=headers, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Parse artist results
+            artists = []
+            try:
+                data = result.get("req_1", {}).get("data", {})
+                body_data = data.get("body", {})
+                singer_list = body_data.get("singer", {}).get("list", [])
+                
+                for singer in singer_list:
+                    artist_mid = singer.get("singerMID", singer.get("singer_mid", ""))
+                    artist_name = singer.get("singerName", singer.get("singer_name", ""))
+                    pic = singer.get("singerPic", singer.get("singer_pic", ""))
+                    
+                    artists.append({
+                        "id": f"qq:{artist_mid}",
+                        "name": artist_name,
+                        "coverUrl": pic,
+                        "albumCount": singer.get("albumNum", 0),
+                        "platform": "qq"
+                    })
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Error parsing QQ artist search: {e}")
+            
+            return artists
+        
+        # For other platforms, fall back to extracting artists from song search
+        return []
+
+    def search_albums(self, platform: Optional[str], keyword: str, page: int = 1, page_size: int = 20) -> List[Dict[str, Any]]:
+        """Search for albums using QQ Music API with search_type: 2"""
+        platform = platform or DEFAULT_PLATFORM
+        
+        if platform == "qq":
+            url = "https://u.y.qq.com/cgi-bin/musicu.fcg"
+            body = {
+                "req_1": {
+                    "method": "DoSearchForQQMusicDesktop",
+                    "module": "music.search.SearchCgiService",
+                    "param": {
+                        "query": keyword,
+                        "page_num": page,
+                        "num_per_page": page_size,
+                        "search_type": 2  # 2 = album
+                    }
+                }
+            }
+            headers = {"Content-Type": "application/json", "Referer": "https://y.qq.com/"}
+            response = requests.post(url, json=body, headers=headers, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Parse album results
+            albums = []
+            try:
+                data = result.get("req_1", {}).get("data", {})
+                body_data = data.get("body", {})
+                album_list = body_data.get("album", {}).get("list", [])
+                
+                for album in album_list:
+                    album_mid = album.get("albumMID", album.get("album_mid", ""))
+                    album_name = album.get("albumName", album.get("album_name", ""))
+                    
+                    # Get singer info
+                    singers = album.get("singer_list", album.get("singerList", []))
+                    artist_name = ", ".join([s.get("name", s.get("singer_name", "")) for s in singers]) if singers else "Unknown"
+                    
+                    # Cover URL
+                    cover_url = f"https://y.qq.com/music/photo_new/T002R300x300M000{album_mid}.jpg" if album_mid else ""
+                    
+                    albums.append({
+                        "id": f"qq:{album_mid}",
+                        "name": album_name,
+                        "artist": artist_name,
+                        "coverUrl": cover_url,
+                        "songCount": album.get("song_count", 0),
+                        "publishDate": album.get("publicTime", ""),
+                        "platform": "qq"
+                    })
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Error parsing QQ album search: {e}")
+            
+            return albums
+        
+        # For other platforms, fall back to extracting albums from song search
+        return []
+
+    def get_artist_songs(self, platform: str, artist_mid: str, page: int = 1, page_size: int = 50) -> Dict[str, Any]:
+        """Get songs by an artist using QQ Music API"""
+        if platform == "qq":
+            url = "https://u.y.qq.com/cgi-bin/musicu.fcg"
+            body = {
+                "req_1": {
+                    "module": "music.web_singer_info_svr",
+                    "method": "get_singer_detail_info",
+                    "param": {
+                        "sort": 5,
+                        "singermid": artist_mid,
+                        "sin": (page - 1) * page_size,
+                        "num": page_size
+                    }
+                }
+            }
+            headers = {"Content-Type": "application/json", "Referer": "https://y.qq.com/"}
+            response = requests.post(url, json=body, headers=headers, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+            
+            try:
+                data = result.get("req_1", {}).get("data", {})
+                singer_info = data.get("singer_info", {})
+                song_list = data.get("songlist", [])
+                
+                # Parse songs
+                songs = []
+                for track in song_list:
+                    songs.append(self._normalize_track(track, "qq"))
+                
+                return {
+                    "artist": {
+                        "id": f"qq:{artist_mid}",
+                        "name": singer_info.get("name", "Unknown"),
+                        "coverUrl": singer_info.get("pic", ""),
+                        "albumCount": data.get("total_album", 0)
+                    },
+                    "songs": songs,
+                    "total": data.get("total_song", len(songs))
+                }
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Error fetching artist songs: {e}")
+                return {"artist": {"id": f"qq:{artist_mid}", "name": "Unknown"}, "songs": [], "total": 0}
+        
+        return {"artist": {"id": f"{platform}:{artist_mid}", "name": "Unknown"}, "songs": [], "total": 0}
+
+    def get_album_songs(self, platform: str, album_mid: str) -> Dict[str, Any]:
+        """Get songs from an album using QQ Music API"""
+        if platform == "qq":
+            url = "https://u.y.qq.com/cgi-bin/musicu.fcg"
+            body = {
+                "req_1": {
+                    "module": "music.musichallAlbum.AlbumInfoServer",
+                    "method": "GetAlbumDetail",
+                    "param": {
+                        "albumMid": album_mid
+                    }
+                }
+            }
+            headers = {"Content-Type": "application/json", "Referer": "https://y.qq.com/"}
+            response = requests.post(url, json=body, headers=headers, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+            
+            try:
+                data = result.get("req_1", {}).get("data", {})
+                album_info = data.get("basicInfo", {})
+                song_list = data.get("songList", [])
+                
+                # Get artist info
+                singers = album_info.get("singer", {}).get("singerList", [])
+                artist_name = ", ".join([s.get("name", "") for s in singers]) if singers else "Unknown"
+                
+                # Parse songs
+                songs = []
+                for item in song_list:
+                    track = item.get("songInfo", item)
+                    songs.append(self._normalize_track(track, "qq"))
+                
+                cover_url = f"https://y.qq.com/music/photo_new/T002R300x300M000{album_mid}.jpg"
+                
+                return {
+                    "album": {
+                        "id": f"qq:{album_mid}",
+                        "name": album_info.get("albumName", "Unknown"),
+                        "artist": artist_name,
+                        "coverUrl": cover_url,
+                        "publishDate": album_info.get("publishDate", ""),
+                        "description": album_info.get("desc", "")
+                    },
+                    "songs": songs,
+                    "total": len(songs)
+                }
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Error fetching album songs: {e}")
+                return {"album": {"id": f"qq:{album_mid}", "name": "Unknown"}, "songs": [], "total": 0}
+        
+        return {"album": {"id": f"{platform}:{album_mid}", "name": "Unknown"}, "songs": [], "total": 0}
+
 
 # Global client instance
 tunehub_client = TuneHubClient()
