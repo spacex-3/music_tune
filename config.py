@@ -19,6 +19,10 @@ SUBSONIC_VERSION = "1.16.1"
 DEFAULT_PLATFORM = os.getenv("DEFAULT_PLATFORM", "netease")  # netease | qq | kuwo
 DEFAULT_QUALITY = os.getenv("DEFAULT_QUALITY", "320k")  # 128k | 320k | flac | flac24bit
 
+# Search Settings
+# Options: "qq" (QQ only), "netease" (Netease only), "both" (both platforms, QQ first)
+SEARCH_PLATFORMS = os.getenv("SEARCH_PLATFORMS", "both")
+
 # Server Settings
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "4040"))

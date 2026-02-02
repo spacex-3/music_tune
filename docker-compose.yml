@@ -15,6 +15,7 @@ services:
       - SUBSONIC_PASSWORD=${SUBSONIC_PASSWORD:-admin}
       # Audio Settings
       - DEFAULT_QUALITY=${DEFAULT_QUALITY:-flac} # 128k | 320k | flac | flac24bit
+      - SEARCH_PLATFORMS=${SEARCH_PLATFORMS:-both} # qq | netease | both
       - AUDIO_CACHE_MAX_SIZE=${AUDIO_CACHE_MAX_SIZE:-10737418240} # Default: 10GB (in bytes)
       # Server Settings
       - SERVER_HOST=0.0.0.0

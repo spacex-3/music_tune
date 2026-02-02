@@ -14,7 +14,7 @@ from logging.handlers import RotatingFileHandler
 from config import (
     SUBSONIC_USER, SUBSONIC_PASSWORD, SUBSONIC_VERSION,
     SERVER_HOST, SERVER_PORT, DEFAULT_PLATFORM, DEFAULT_QUALITY,
-    ALLOWED_PLAYLISTS, AUDIO_CACHE_MAX_SIZE
+    ALLOWED_PLAYLISTS, AUDIO_CACHE_MAX_SIZE, SEARCH_PLATFORMS
 )
 from tunehub_client import tunehub_client, TuneHubClient
 from subsonic_formatter import (
@@ -1096,15 +1096,19 @@ def search():
         # Only fetch from API if we need songs (to avoid wasting API calls)
         all_songs = []
         if song_count > 0 or artist_count > 0 or album_count > 0:
-            # Allow specifying single platform via parameter, otherwise search both
+            # Allow specifying single platform via parameter, otherwise use config
             platform = request.args.get("platform", "")
             
             if platform:
-                # Single platform search
+                # Single platform search (from URL parameter)
                 songs = tunehub_client.search(platform, query)
                 all_songs.extend(songs)
+            elif SEARCH_PLATFORMS in ("qq", "netease"):
+                # Single platform from config
+                songs = tunehub_client.search(SEARCH_PLATFORMS, query)
+                all_songs.extend(songs)
             else:
-                # Multi-platform search: search both netease and qq
+                # Multi-platform search: search both, QQ results first
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 
                 def search_platform(p):
@@ -1114,12 +1118,22 @@ def search():
                         logger.warning(f"Search failed for {p}: {e}")
                         return []
                 
-                # Search both platforms in parallel
+                # Search both platforms in parallel, collect results separately
+                qq_songs = []
+                netease_songs = []
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     futures = {executor.submit(search_platform, p): p for p in ["qq", "netease"]}
                     for future in as_completed(futures):
+                        platform_name = futures[future]
                         songs = future.result()
-                        all_songs.extend(songs)
+                        if platform_name == "qq":
+                            qq_songs = songs
+                        else:
+                            netease_songs = songs
+                
+                # QQ results first, then Netease
+                all_songs.extend(qq_songs)
+                all_songs.extend(netease_songs)
         
         # Cache song metadata for cover art support
         for song in all_songs:
